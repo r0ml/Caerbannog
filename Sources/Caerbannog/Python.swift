@@ -10,71 +10,90 @@ public let PyNone = UnsafeMutableRawPointer( &_Py_NoneStruct ).assumingMemoryBou
 
 public let Python = PythonInterface()
 
+private func throwErrorIfPresent() throws {
+  if PyErr_Occurred() == nil { return }
+  
+  var type: PyObjectRef?
+  var value: PyObjectRef?
+  var traceback: PyObjectRef?
+  
+  // Fetch the exception and clear the exception state.
+  PyErr_Fetch(&type, &value, &traceback)
+  
+  // The value for the exception may not be set but the type always should be.
+  let resultObject = PythonObject(consuming: value ?? type!)
+  let tracebackObject = traceback.flatMap { PythonObject(consuming: $0) }
+  throw PythonError.exception(resultObject, traceback: tracebackObject)
+}
+
+
 @dynamicMemberLookup
 public class PythonInterface {
-
+  
   public let pyBuiltins: PythonObject // this is the Python builtins object
+  public let pyGlobals: PyObjectRef
   public var builtins : [ String : PythonObject ]  = [:] // this is a Swift dictionary mapping names to Python builtin objects
   
   fileprivate init() {
-
+    
     initModule("stdout_cap")
     
     let hh = Bundle.main.privateFrameworksURL!
     let hh1 = hh.appendingPathComponent("Python3.framework").appendingPathComponent("Versions").appendingPathComponent("Current")
     hh1.path.withWideChars {
-        Py_SetPythonHome( $0 )
+      Py_SetPythonHome( $0 )
     }
     
     // =======================================================================
     // Above the line is the initialization of the Swift-implemented module(s)
     // below is the actual initialization of the Python interpreter
     Py_Initialize()   // Initialize Python
-    pyBuiltins = PythonObject(retaining: PyEval_GetBuiltins())
-
-
     
     // This goes ahead and imports the module defined above
-    let zz = PyImport_ImportModule("stdout_cap")
-    print(zz)
+//    let zz = PyImport_ImportModule("stdout_cap")
+//    try! throwErrorIfPresent()
+  
+    pyBuiltins = PythonObject(retaining: PyEval_GetBuiltins())
     
-    PyRun_SimpleStringFlags("""
-    import stdout_cap
-    import sys
-    class StdoutCatcher:
-        def write(self, stuff):
-            stdout_cap.error_out(stuff)
-    sys.stdout = StdoutCatcher()
-    """, nil);
+    let __main__ = PyImport_ImportModule("__main__")
+    pyGlobals = PyModule_GetDict( __main__ )
+    pyGlobals.pointee.ob_refcnt += 1
 
+    // let module = PyImport_ImportModule("sys")
+    // let sys = PythonObject(consuming: module!)
+    // builtins["sys"] = sys
     
-    /*
-    let sys = PyImport_ImportModule("sys")!
+    //  // If I were initialized, I could have said:
+    let sys = self.sys
     let bb = Bundle.main.resourceURL!
     let bb1 = bb.appendingPathComponent("venv").appendingPathComponent("lib").appendingPathComponent("python3.7").appendingPathComponent("site-packages")
-    let sysx = PythonObject(consuming: sys)
-    try! sysx.path.insert(0, bb1.path)
- */
-  }
-
-  // Python error (if active) thrown as a Swift error
-  func throwErrorIfPresent() throws {
-    if PyErr_Occurred() == nil { return }
-
-    var type: PyObjectRef?
-    var value: PyObjectRef?
-    var traceback: PyObjectRef?
-
-    // Fetch the exception and clear the exception state.
-    PyErr_Fetch(&type, &value, &traceback)
-
-    // The value for the exception may not be set but the type always should be.
-    let resultObject = PythonObject(consuming: value ?? type!)
-    let tracebackObject = traceback.flatMap { PythonObject(consuming: $0) }
-    throw PythonError.exception(resultObject, traceback: tracebackObject)
+    try! sys.path.insert(0, bb1.path)
+    
+    
+   
+    PyRun_SimpleStringFlags("""
+import stdout_cap
+import sys
+class StdoutCatcher:
+    def write(self, stuff):
+        stdout_cap.error_out(stuff)
+sys.stdout = StdoutCatcher()
+""", nil);
+    
+    try! throwErrorIfPresent()
+    
+    /*
+     let sys = PyImport_ImportModule("sys")!
+     let bb = Bundle.main.resourceURL!
+     let bb1 = bb.appendingPathComponent("venv").appendingPathComponent("lib").appendingPathComponent("python3.7").appendingPathComponent("site-packages")
+     let sysx = PythonObject(consuming: sys)
+     try! sysx.path.insert(0, bb1.path)
+     */
   }
   
+  
   public subscript(dynamicMember name: String) -> PythonObject {
+    get {
     if let obj = builtins[name] {
       return obj
     }
@@ -86,7 +105,42 @@ public class PythonInterface {
       builtins[name] = res
       return res
     }
+    try! throwErrorIfPresent()
     return PythonObject(consuming: PyNone)
+  }
+  }
+  
+  // Python error (if active) thrown as a Swift error
+  
+  public subscript<T>(dynamicMember name: String) -> T? where T : ConvertibleToPython {
+    get {
+    if let obj = builtins[name] {
+      return obj as? T
+    }
+    if let obj = pyBuiltins[name] {
+      return obj as? T
+    }
+    if let module = PyImport_ImportModule(name) {
+      let res = PythonObject(consuming: module)
+      builtins[name] = res
+      return res as? T
+    }
+    try! throwErrorIfPresent()
+    return PythonObject(consuming: PyNone) as? T
+  }
+    set {
+      PyDict_SetItem(pyGlobals, name.pythonObject.retained(), newValue.pythonObject.retained())
+    }
+    
+  }
+  
+  public func run(_ str : String, returning: String) -> PythonObject? {
+    return self.run(str, returning: [returning]).first!
+  }
+  
+  public func run(_ str : String, returning: [String] = []) -> [PythonObject?] {
+    PyRun_SimpleStringFlags(str, nil)
+    return returning.map { PythonObject(retaining: PyDict_GetItemString(pyGlobals, $0)) }
   }
 }
 
@@ -94,18 +148,18 @@ public class PythonInterface {
 @dynamicMemberLookup
 public struct PythonObject {
   var pointer: PyObjectRef
-
+  
   public init(retaining pointer: PyObjectRef) {
     self.pointer = pointer
     retain()
   }
-
+  
   public init(consuming pointer: PyObjectRef) {
     self.pointer = pointer
   }
-
+  
   public func retain() {
-     Py_IncRef(pointer)
+    Py_IncRef(pointer)
   }
   
   public func retained() -> PyObjectRef {
@@ -116,7 +170,6 @@ public struct PythonObject {
   public func release() {
     Py_DecRef(pointer)
   }
-
 }
 
 extension PythonObject : CustomStringConvertible {
@@ -141,7 +194,7 @@ public extension PythonObject {
   init(tupleOf elements: ConvertibleToPython...) {
     self.init(tupleContentsOf: elements)
   }
-
+  
   init<T : Collection>(tupleContentsOf elements: T) where T.Element == ConvertibleToPython {
     let tuple = PyTuple_New(elements.count)!
     for (index, element) in elements.enumerated() {
@@ -152,23 +205,31 @@ public extension PythonObject {
 }
 
 public extension PythonObject {
-
+  
   subscript(dynamicMember memberName: String) -> PythonObject {
     get {
-      guard let result = (memberName.utf8CString.withUnsafeBufferPointer { PyObject_GetAttrString(pointer, $0.baseAddress) }) else {
-        try! Python.throwErrorIfPresent()
-        return PythonObject(retaining: PyNone)
+      if let result = (memberName.utf8CString.withUnsafeBufferPointer {
+        PyObject_GetAttrString(pointer, $0.baseAddress) }) {
+        return PythonObject(consuming: result)
       }
-      return PythonObject(consuming: result)
+      
+      if self.isType(&PyModule_Type) {
+        let s = String(self.__name__)!+"."+memberName
+        return PythonObject(consuming: PyImport_Import(PythonObject(s).retained()))
+      }
+      
+      try! throwErrorIfPresent()
+      return PythonObject(retaining: PyNone)
     }
+    
     nonmutating set {
       let selfObject = retained()
       defer { release() }
       let valueObject = newValue.retained()
       defer { newValue.release() }
-
+      
       if PyObject_SetAttrString(selfObject, memberName, valueObject) == -1 {
-        try! Python.throwErrorIfPresent()
+        try! throwErrorIfPresent()
         fatalError("Could not set PythonObject member '\(memberName)' to the specified value")
       }
     }
@@ -185,7 +246,7 @@ public extension PythonObject {
       } else {
         PyObject_DelItem(pointer, key.pythonObject.pointer)
       }
-      try! Python.throwErrorIfPresent()
+      try! throwErrorIfPresent()
     }
   }
   
@@ -197,22 +258,22 @@ public extension PythonObject {
   func dynamicallyCall(
     withArguments args: [ConvertibleToPython] = []
   ) throws -> PythonObject {
-    try Python.throwErrorIfPresent()
-
+    try throwErrorIfPresent()
+    
     // Positional arguments are passed as a tuple of objects.
     let argTuple = PythonObject(tupleContentsOf: args)
     defer { argTuple.release() }
-
+    
     // Python calls always return a non-null object when successful. If the
     // Python function produces the equivalent of C `void`, it returns the
     // `None` object. A `null` result of `PyObjectCall` happens when there is an
     // error, like `self` not being a Python callable.
     let selfObject = retained()
     defer { release() }
-
+    
     guard let result = PyObject_CallObject(selfObject, argTuple.pointer) else {
       // If a Python exception was thrown, throw a corresponding Swift error.
-      try Python.throwErrorIfPresent()
+      try throwErrorIfPresent()
       throw PythonError.invalidCall(self)
     }
     return PythonObject(consuming: result)
@@ -225,15 +286,15 @@ public extension PythonObject {
   @discardableResult
   func dynamicallyCall(
     withKeywordArguments args:
-      KeyValuePairs<String, ConvertibleToPython> = [:]
+    KeyValuePairs<String, ConvertibleToPython> = [:]
   ) throws -> PythonObject {
-    try Python.throwErrorIfPresent()
-
+    try throwErrorIfPresent()
+    
     // An array containing positional arguments.
     var positionalArgs: [PythonObject] = []
     // A dictionary object for storing keyword arguments, if any exist.
     var kwdictObject: PyObjectRef? = nil
-
+    
     for (key, value) in args {
       if key.isEmpty {
         positionalArgs.append(value.pythonObject)
@@ -250,23 +311,23 @@ public extension PythonObject {
       Py_DecRef(k)
       Py_DecRef(v)
     }
-
+    
     defer { Py_DecRef(kwdictObject) } // Py_DecRef is `nil` safe.
-
+    
     // Positional arguments are passed as a tuple of objects.
     let argTuple = PythonObject(tupleContentsOf: positionalArgs)
     defer { argTuple.release() }
-
+    
     // Python calls always return a non-null object when successful. If the
     // Python function produces the equivalent of C `void`, it returns the
     // `None` object. A `null` result of `PyObjectCall` happens when there is an
     // error, like `self` not being a Python callable.
     let selfObject = retained()
     defer { release() }
-
+    
     guard let result = PyObject_Call(selfObject, argTuple.pointer, kwdictObject) else {
       // If a Python exception was thrown, throw a corresponding Swift error.
-      try Python.throwErrorIfPresent()
+      try throwErrorIfPresent()
       throw PythonError.invalidCall(self)
     }
     return PythonObject(consuming: result)
@@ -277,11 +338,11 @@ public extension PythonObject {
 // String extensions
 //=======================================================================
 extension String {
-    /// Calls the given closure with a pointer to the contents of the string represented as a null-terminated wchar_t array.
-    func withWideChars<Result>(_ body: (UnsafeMutablePointer<wchar_t>) -> Result) -> Result {
-        var u32 = self.unicodeScalars.map { wchar_t(bitPattern: $0.value) } + [0]
-        return u32.withUnsafeMutableBufferPointer { body($0.baseAddress!) }
-    }
+  /// Calls the given closure with a pointer to the contents of the string represented as a null-terminated wchar_t array.
+  func withWideChars<Result>(_ body: (UnsafeMutablePointer<wchar_t>) -> Result) -> Result {
+    var u32 = self.unicodeScalars.map { wchar_t(bitPattern: $0.value) } + [0]
+    return u32.withUnsafeMutableBufferPointer { body($0.baseAddress!) }
+  }
 }
 
 //================================================================================
@@ -320,10 +381,10 @@ private typealias PythonBinaryOp = (PyObjectRef?, PyObjectRef?) -> PyObjectRef?
 public extension PythonObject {
   private static func binaryOp(_ op: PythonBinaryOp, lhs: PythonObject, rhs: PythonObject) -> PythonObject {
     let result = op(lhs.pointer, rhs.pointer)
-    try! Python.throwErrorIfPresent()
+    try! throwErrorIfPresent()
     return PythonObject(consuming: result!)
   }
-
+  
   static func + (lhs: PythonObject, rhs: PythonObject) -> PythonObject { return binaryOp(PyNumber_Add, lhs: lhs, rhs: rhs)  }
   static func - (lhs: PythonObject, rhs: PythonObject) -> PythonObject { return binaryOp(PyNumber_Subtract, lhs: lhs, rhs: rhs)  }
   static func * (lhs: PythonObject, rhs: PythonObject) -> PythonObject { return binaryOp(PyNumber_Multiply, lhs: lhs, rhs: rhs)  }
@@ -344,11 +405,11 @@ extension PythonObject : Equatable, Comparable {
     case 0: return false
     case 1: return true
     default:
-      try! Python.throwErrorIfPresent()
+      try! throwErrorIfPresent()
       fatalError("No result or error returned when comparing \(self) to \(other)")
     }
   }
-
+  
   public static func == (lhs: PythonObject, rhs: PythonObject) -> Bool { return lhs.compared(to: rhs, byOp: Py_EQ) }
   public static func != (lhs: PythonObject, rhs: PythonObject) -> Bool { return lhs.compared(to: rhs, byOp: Py_NE) }
   public static func <  (lhs: PythonObject, rhs: PythonObject) -> Bool { return lhs.compared(to: rhs, byOp: Py_LT) }
@@ -371,15 +432,15 @@ extension PythonObject : Hashable {
 extension PythonObject : MutableCollection {
   public typealias Index = PythonObject
   public typealias Element = PythonObject
-
+  
   public var startIndex: Index { return PythonObject(0) }
   public var endIndex: Index { return try! Python.len(self) }
   public func index(after i: Index) -> Index { return i + PythonObject(1) }
-
+  
   public subscript(index: PythonObject) -> PythonObject {
     get {
       if let j = self[index as ConvertibleToPython] { return j }
-      try! Python.throwErrorIfPresent()
+      try! throwErrorIfPresent()
       return PythonObject(consuming: PyExc_IndexError)
     }
     set {
@@ -394,19 +455,19 @@ extension PythonObject : MutableCollection {
 extension PythonObject : Sequence {
   public struct Iterator : IteratorProtocol {
     fileprivate let pythonIterator: PythonObject
-
+    
     public func next() -> PythonObject? {
       guard let result = PyIter_Next(self.pythonIterator.pointer) else {
-        try! Python.throwErrorIfPresent()
+        try! throwErrorIfPresent()
         return nil
       }
       return PythonObject(consuming: result)
     }
   }
-
+  
   public func makeIterator() -> Iterator {
     guard let result = PyObject_GetIter(pointer) else {
-      try! Python.throwErrorIfPresent()
+      try! throwErrorIfPresent()
       preconditionFailure()
     }
     return Iterator(pythonIterator: PythonObject(consuming: result))

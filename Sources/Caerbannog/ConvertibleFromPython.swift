@@ -16,24 +16,24 @@ extension PythonObject : ConvertibleFromPython {
   }
 }
 
-fileprivate extension PythonObject {
+extension PythonObject {
   /* I need the inout in order to get the address of the Python Type Object, which is needed for comparison */
   func isType(_ type : inout PyTypeObject) -> Bool {
-//    let tz = self.pointer.pointee.ob_type.pointee
+    //    let tz = self.pointer.pointee.ob_type.pointee
     let tz = self.pointer.pointee.ob_type
-  //  return withUnsafePointer(to: tz) { (tzx) -> Bool in
-      return withUnsafeMutablePointer(to: &type) {
-        (zz : UnsafeMutablePointer<PyTypeObject>) -> Bool in
-
+    //  return withUnsafePointer(to: tz) { (tzx) -> Bool in
+    return withUnsafeMutablePointer(to: &type) {
+      (zz : UnsafeMutablePointer<PyTypeObject>) -> Bool in
+      
       let ss = tz == zz
-        let gg = Int(0) != Int(PyType_IsSubtype(self.pointer.pointee.ob_type, zz))
+      let gg = Int(0) != Int(PyType_IsSubtype(self.pointer.pointee.ob_type, zz))
       return ss || gg
     }
-//    return q != 0
-/*    var typex = type
-  let typePyRef = UnsafeMutableRawPointer( &typex).assumingMemoryBound(to: PyObject.self)
-*/
-
+    //    return q != 0
+    /*    var typex = type
+     let typePyRef = UnsafeMutableRawPointer( &typex).assumingMemoryBound(to: PyObject.self)
+     */
+    
     // let result = Int(PyObject_IsInstance(pointer, &tx))
     // return result != 0
   }
@@ -165,5 +165,46 @@ extension Data : ConvertibleFromPython {
     c.withMemoryRebound(to: UInt8.self, capacity: b) {
       self.append($0, count: b )
     }
+  }
+}
+
+// ==============================================================================
+// Numpy support
+
+public protocol NumpyScalar { static var scalarType: PythonObject { get }; static var `default`: Self { get } }
+
+extension Int16 : NumpyScalar { public static let scalarType = np.int16; public static let `default` : Int16 = 0 }
+extension Float : NumpyScalar { public static let scalarType = np.float32; public static let `default` : Float = 0 }
+private let np = Python.numpy
+
+extension Array where Element : NumpyScalar {
+  public init?(numpyArray: PythonObject) {
+    // Check if input is a `numpy.ndarray` instance.
+    let bb = try? Python.isinstance(numpyArray, np.ndarray)
+    guard let bbb = bb, let b = Bool(bbb) else { return nil }
+    if !b { return nil }
+    
+    // Check if the dtype of the `ndarray` is compatible with the `Element` type.
+    guard Element.scalarType == numpyArray.dtype else { return nil }
+    
+    // Make sure that the array is contiguous in memory.
+    let cNumpyArray = try! np.ascontiguousarray(numpyArray)
+    
+    // Only one dimensional instances can be converted to `Array`.
+    guard let pyShape = cNumpyArray.__array_interface__["shape"] else { return nil }
+    guard let shape = Array<Int>(pyShape) else { return nil }
+    guard shape.count == 1 else { return nil }
+    
+    guard let d = cNumpyArray.__array_interface__["data"], let ptrVal : PythonObject = d[0], let ptrr = UInt(ptrVal) else {
+      return nil
+    }
+    guard let ptr = UnsafePointer<Element>(bitPattern: ptrr ) else { return nil }
+    
+    // initialize an array of the appropriate length
+    let scalarCount = shape[0]
+    self.init(repeating: Element.default, count: scalarCount)
+    
+    // copy the data
+    withUnsafeMutableBufferPointer { buffPtr in buffPtr.baseAddress!.assign(from: ptr, count: scalarCount) }
   }
 }
