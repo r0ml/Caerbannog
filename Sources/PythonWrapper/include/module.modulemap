@@ -1,0 +1,6 @@
+module PythonWrapper {
+    header "Headers/Python.h"
+    export *
+    link "lib/Python3"
+}
+
