@@ -18,7 +18,7 @@ extension PythonObject : ConvertibleFromPython {
 
 extension PythonObject {
   /* I need the inout in order to get the address of the Python Type Object, which is needed for comparison */
-  func isType(_ type : inout PyTypeObject) -> Bool {
+  public func isType(_ type : inout PyTypeObject) -> Bool {
     //    let tz = self.pointer.pointee.ob_type.pointee
     let tz = self.pointer.pointee.ob_type
     //  return withUnsafePointer(to: tz) { (tzx) -> Bool in
@@ -100,6 +100,7 @@ extension Optional : ConvertibleFromPython where Wrapped : ConvertibleFromPython
 
 extension Array : ConvertibleFromPython where Element : ConvertibleFromPython {
   public init?(_ pythonObject: PythonObject) {
+    guard let _ = PyObject_GetIter(pythonObject.pointer) else { PyErr_Clear(); return nil }
     self = []
     for elementObject in pythonObject {
       guard let element = Element(elementObject) else { return nil }

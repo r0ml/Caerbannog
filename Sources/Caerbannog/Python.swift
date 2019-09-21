@@ -8,9 +8,12 @@ public let PyFalse = UnsafeMutableRawPointer( &_Py_FalseStruct ).assumingMemoryB
 public let PyTrue = UnsafeMutableRawPointer( &_Py_TrueStruct ).assumingMemoryBound(to: PyObject.self)
 public let PyNone = UnsafeMutableRawPointer( &_Py_NoneStruct ).assumingMemoryBound(to: PyObject.self)
 
-public let Python = PythonInterface()
+public var stdout : StdoutCapture!
+public var swiftModule : SwiftModule!
 
-private func throwErrorIfPresent() throws {
+public var Python = PythonInterface()
+
+fileprivate func throwErrorIfPresent() throws {
   if PyErr_Occurred() == nil { return }
   
   var type: PyObjectRef?
@@ -26,39 +29,58 @@ private func throwErrorIfPresent() throws {
   throw PythonError.exception(resultObject, traceback: tracebackObject)
 }
 
-
 @dynamicMemberLookup
 public class PythonInterface {
-  
-  public let pyBuiltins: PythonObject // this is the Python builtins object
-  public let pyGlobals: PyObjectRef
+
+  public var pyBuiltins: PythonObject! // this is the Python builtins object
+  public var pyGlobals: PyObjectRef!
   public var builtins : [ String : PythonObject ]  = [:] // this is a Swift dictionary mapping names to Python builtin objects
   
-  fileprivate init() {
-    
-    initModule("stdout_cap")
-    
+  public init() {
     let hh = Bundle.main.privateFrameworksURL!
     let hh1 = hh.appendingPathComponent("Python3.framework").appendingPathComponent("Versions").appendingPathComponent("Current")
     hh1.path.withWideChars {
       Py_SetPythonHome( $0 )
     }
     
+  }
+  
+  public func setup() {
+    stdout = StdoutCapture()
+    swiftModule = SwiftModule()
+  }
+  
+  public func start() {
     // =======================================================================
     // Above the line is the initialization of the Swift-implemented module(s)
     // below is the actual initialization of the Python interpreter
     Py_Initialize()   // Initialize Python
-    
-    // This goes ahead and imports the module defined above
-//    let zz = PyImport_ImportModule("stdout_cap")
-//    try! throwErrorIfPresent()
-  
-    pyBuiltins = PythonObject(retaining: PyEval_GetBuiltins())
-    
+
     let __main__ = PyImport_ImportModule("__main__")
     pyGlobals = PyModule_GetDict( __main__ )
     pyGlobals.pointee.ob_refcnt += 1
 
+    let stdcn = "stdout_capture"
+    let stdcnn = stdcn.cString(using: .utf8)
+    let stdc = PyImport_ImportModule(stdcnn)
+    try! throwErrorIfPresent()
+    PyDict_SetItem(pyGlobals, stdcn.pythonObject.retained(), stdc)
+    
+    let smn = "swift_module"
+    let smnn = smn.cString(using: .utf8)
+    let sm = PyImport_ImportModule(smnn)
+    try! throwErrorIfPresent()
+    PyDict_SetItem(pyGlobals, smn.pythonObject.retained(), sm)
+    
+    pyBuiltins = PythonObject(retaining: PyEval_GetBuiltins())
+    
+    // the right way to handle this is to create a function that uses certifi to generate
+    // a usable https_context.  Meanwhilst, this hack is good enough for a demo
+    Python.ssl._create_default_https_context = Python.ssl._create_unverified_context
+    
+  }
+  
+  private func doStart() {
     // let module = PyImport_ImportModule("sys")
     // let sys = PythonObject(consuming: module!)
     // builtins["sys"] = sys
@@ -69,19 +91,7 @@ public class PythonInterface {
     let bb1 = bb.appendingPathComponent("venv").appendingPathComponent("lib").appendingPathComponent("python3.7").appendingPathComponent("site-packages")
     try! sys.path.insert(0, bb1.path)
     
-    
    
-    PyRun_SimpleStringFlags("""
-import stdout_cap
-import sys
-class StdoutCatcher:
-    def write(self, stuff):
-        stdout_cap.error_out(stuff)
-sys.stdout = StdoutCatcher()
-""", nil);
-    
-    try! throwErrorIfPresent()
-    
     /*
      let sys = PyImport_ImportModule("sys")!
      let bb = Bundle.main.resourceURL!
@@ -139,8 +149,15 @@ sys.stdout = StdoutCatcher()
   }
   
   public func run(_ str : String, returning: [String] = []) -> [PythonObject?] {
+    // If I had an error somewhere and forgot to check, now is when I'm going to ignore it.
+    PyErr_Clear()
     PyRun_SimpleStringFlags(str, nil)
-    return returning.map { PythonObject(retaining: PyDict_GetItemString(pyGlobals, $0)) }
+    if PyErr_Occurred() != nil {
+      PyErr_Print()
+      PyErr_Clear()
+    }
+    let r = returning.map { PythonObject(retaining: PyDict_GetItemString(pyGlobals, $0)) }
+    return r
   }
 }
 
@@ -174,7 +191,9 @@ public struct PythonObject {
 
 extension PythonObject : CustomStringConvertible {
   public var description: String {
-    return try! String( Python.str(self))!
+    let z = PythonObject(retaining: PyEval_GetBuiltins())
+    let str = z["str"]!
+    return try! String( str(self))!
   }
 }
 
@@ -458,7 +477,8 @@ extension PythonObject : Sequence {
     
     public func next() -> PythonObject? {
       guard let result = PyIter_Next(self.pythonIterator.pointer) else {
-        try! throwErrorIfPresent()
+        PyErr_Print() // try! throwErrorIfPresent()
+        PyErr_Clear()
         return nil
       }
       return PythonObject(consuming: result)

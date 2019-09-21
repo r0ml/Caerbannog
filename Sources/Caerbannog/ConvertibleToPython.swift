@@ -17,8 +17,12 @@ extension Bool : ConvertibleToPython {
 
 extension String : ConvertibleToPython {
   public var pythonObject: PythonObject {
-    let v = utf8CString.withUnsafeBufferPointer { PyUnicode_FromStringAndSize($0.baseAddress, $0.count - 1)! }
-    return PythonObject(consuming: v)
+    let v = self.cString(using:.utf8)!
+    let c = v.count
+    let r = UnsafeMutablePointer<CChar>.allocate(capacity: c)
+    for i in 0..<c { r[i]=v[i] }
+    let j = PyUnicode_FromStringAndSize(r, c - 1)!
+    return PythonObject(consuming: j)
   }
 }
 
