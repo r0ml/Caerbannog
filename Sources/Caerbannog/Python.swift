@@ -78,9 +78,7 @@ public class PythonInterface {
     // a usable https_context.  Meanwhilst, this hack is good enough for a demo
     Python.ssl._create_default_https_context = Python.ssl._create_unverified_context
     
-  }
-  
-  private func doStart() {
+
     // let module = PyImport_ImportModule("sys")
     // let sys = PythonObject(consuming: module!)
     // builtins["sys"] = sys
@@ -88,8 +86,12 @@ public class PythonInterface {
     //  // If I were initialized, I could have said:
     let sys = self.sys
     let bb = Bundle.main.resourceURL!
-    let bb1 = bb.appendingPathComponent("venv").appendingPathComponent("lib").appendingPathComponent("python3.7").appendingPathComponent("site-packages")
-    try! sys.path.insert(0, bb1.path)
+    let bb1 = bb.appendingPathComponent("venv").appendingPathComponent("lib")
+    let bb2 = try! FileManager.default.contentsOfDirectory(atPath: bb1.path)
+    for k in bb2 {
+      let bb3 = bb1.appendingPathComponent(k).appendingPathComponent("site-packages")
+      try! sys.path.insert(0, bb3.path)
+    }
     
    
     /*
