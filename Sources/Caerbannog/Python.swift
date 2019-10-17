@@ -74,17 +74,6 @@ public class PythonInterface {
     
     pyBuiltins = PythonObject(retaining: PyEval_GetBuiltins())
     
-
-    let _ = Python.run("""
-import ssl
-import certifi
-
-def _create_certifi_context():
-  return ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH, cafile=certifi.where())
-
-ssl._create_default_https_context = _create_certifi_context
-""")
-
     // let module = PyImport_ImportModule("sys")
     // let sys = PythonObject(consuming: module!)
     // builtins["sys"] = sys
@@ -99,16 +88,16 @@ ssl._create_default_https_context = _create_certifi_context
       try! sys.path.insert(0, bb3.path)
     }
     
-   
-    /*
-     let sys = PyImport_ImportModule("sys")!
-     let bb = Bundle.main.resourceURL!
-     let bb1 = bb.appendingPathComponent("venv").appendingPathComponent("lib").appendingPathComponent("python3.7").appendingPathComponent("site-packages")
-     let sysx = PythonObject(consuming: sys)
-     try! sysx.path.insert(0, bb1.path)
-     */
+    let _ = Python.run("""
+import ssl
+import certifi
+
+def _create_certifi_context():
+  return ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH, cafile=certifi.where())
+
+ssl._create_default_https_context = _create_certifi_context
+""")
   }
-  
   
   public subscript(dynamicMember name: String) -> PythonObject {
     get {
