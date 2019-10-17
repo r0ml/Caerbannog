@@ -14,14 +14,6 @@ A sample application using Caerbannog is in the github repository r0ml/Caerbanno
 4) need to "disable library validation" on the 'signing and capabilities' tab because codesigning was disabled on the embedded framework.
 5) Create a virtual environment in the app, and pip install the necessary frameworks.   Change directory to the root directory of the application and run  'python3 -m venv venv'    followed by  '. venv/bin/activate'
 
-
-
-6) In 3.7, SSL_CERTS are required, and are verified, and that doesn't work for some reason in embedded Python.  By inserting this line:           ssl._create_default_https_context = ssl._create_unverified_context
-in the initialization, it seems starts working again.
-
-// FIXME:
-This can possibly be fixed by setting SSL_CERT_FILE to something else, the default being /usr/loal/etc/openssl/cert.pem
-
 ========================================================
 
 1) Also see:  Beeware (https://beeware.org) , Pyto (https://pyto.app)

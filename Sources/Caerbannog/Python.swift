@@ -74,10 +74,16 @@ public class PythonInterface {
     
     pyBuiltins = PythonObject(retaining: PyEval_GetBuiltins())
     
-    // the right way to handle this is to create a function that uses certifi to generate
-    // a usable https_context.  Meanwhilst, this hack is good enough for a demo
-    Python.ssl._create_default_https_context = Python.ssl._create_unverified_context
-    
+
+    let _ = Python.run("""
+import ssl
+import certifi
+
+def _create_certifi_context():
+  return ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH, cafile=certifi.where())
+
+ssl._create_default_https_context = _create_certifi_context
+""")
 
     // let module = PyImport_ImportModule("sys")
     // let sys = PythonObject(consuming: module!)
