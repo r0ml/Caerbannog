@@ -1,5 +1,7 @@
 # Caerbannog
 
+# This has been superseded by SwiftyPython
+
 This package embeds a Python interpreter into a macOS app.  It also provides the support to allow a Python module to be written in Swift and be imported and called from the Python code.
 
 To build a macOS app that embeds Python and allows calling into or migrating code into Swift, one adds this package as a dependency.  Then, create a python virtual environment containing the required Python dependencies and sources.  Embed the virtual environment as the Resource folder 'venv'.
